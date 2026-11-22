@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Titan Telemetry &amp; Financial KPI Factory — v6.0.0-SOTA</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      background-color: #060a12;
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    .glass-card {
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 0.65rem;
+      contain: content;
+    }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace;
+      font-variant-numeric: tabular-nums;
+    }
+    /* GPU-composited progress bar: zero layout reflow & zero L3 ring-bus contention */
+    .progress-bar-fill {
+      transform-origin: left center;
+      will-change: transform;
+      transition: transform 0.22s linear;
+    }
+  </style>
+</head>
+<body class="min-h-screen p-4 md:p-5">
+  <div class="max-w-7xl mx-auto space-y-4">
+
+    <!-- Top Control Bar -->
+    <header class="glass-card p-4 flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div id="statusDot" class="w-3 h-3 rounded-full bg-emerald-500"></div>
+        <div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <h1 class="text-base md:text-lg font-bold tracking-tight text-white">
+              TITAN TELEMETRY &amp; FINANCIAL KPI FACTORY
+            </h1>
+            <span class="text-xs font-mono px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+              v6.0.0-SOTA
+            </span>
+            <span id="finStatusBadge" class="text-xs font-mono px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">
+              IDLE
+            </span>
+          </div>
+          <p id="ioPathLabel" class="text-xs text-slate-400 mono mt-0.5">
+            Sequential Disk Read &rarr; L3-Resident Zero-Alloc 64-Bit Math &rarr; ZSTD Parquet Write
+          </p>
+        </div>
+      </div>
+
+      <!-- Hardware Telemetry & Action Controls -->
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="px-2.5 py-1.5 rounded bg-slate-900 border border-slate-800 text-xs mono">
+          CPU: <span id="hwCpu" class="text-cyan-400 font-bold">0.0%</span>
+        </div>
+        <div class="px-2.5 py-1.5 rounded bg-slate-900 border border-slate-800 text-xs mono" title="System RAM &amp; Engine Process RSS">
+          RAM: <span id="hwRam" class="text-emerald-400 font-bold">0.0 / 16.0 GB</span>
+          <span id="hwProcRam" class="text-slate-400 text-[11px] ml-1">(0 MB)</span>
+        </div>
+        <div class="px-2.5 py-1.5 rounded bg-slate-900 border border-slate-800 text-xs mono">
+          SWAP: <span id="hwSwap" class="text-amber-400 font-bold">0 MB</span>
+        </div>
+
+        <select id="nsSelect" class="bg-slate-900 border border-slate-700 text-xs rounded px-2.5 py-1.5 text-slate-200 mono focus:outline-none">
+          <option value="all">Namespace: ALL</option>
+        </select>
+
+        <button onclick="compactActiveNamespace()" class="px-2.5 py-1.5 rounded bg-amber-600/90 hover:bg-amber-500 text-xs font-semibold text-white" title="Merge small Parquet files in selected namespace">
+          Compact Parquet
+        </button>
+        <button onclick="restoreSaved()" class="px-2.5 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white">
+          Replay All Saved
+        </button>
+        <button onclick="refreshStateNow()" class="px-2.5 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white">
+          Sync State
+        </button>
+      </div>
+    </header>
+
+    <!-- Live Streaming Ingestion Progress -->
+    <section class="glass-card p-4 space-y-3">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <div class="flex items-center gap-2.5">
+          <span id="streamBadge" class="px-2.5 py-0.5 text-xs font-bold rounded mono bg-slate-800 text-slate-400">
+            IDLE
+          </span>
+          <span id="streamFile" class="text-sm md:text-base font-semibold text-white mono">
+            Idle &mdash; Drop CSV into ./inbox
+          </span>
+          <span id="streamNs" class="text-xs mono text-cyan-400"></span>
+        </div>
+        <div class="text-xs mono text-slate-400">
+          Elapsed: <span id="streamElapsed" class="text-white font-semibold">0.0s</span> |
+          ETA: <span id="streamEta" class="text-amber-400 font-semibold">0.0s</span>
+        </div>
+      </div>
+
+      <!-- Zero-Reflow GPU Progress Bar -->
+      <div class="w-full h-3.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+        <div id="streamBar" class="h-full w-full bg-gradient-to-r from-emerald-500 to-cyan-400 progress-bar-fill" style="transform: scaleX(0)"></div>
+      </div>
+
+      <!-- Live Speed & Counters -->
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <div class="p-3 rounded bg-slate-900/90 border border-slate-800/90">
+          <div class="text-[11px] text-slate-400 uppercase">Completion</div>
+          <div id="streamPct" class="text-lg font-bold text-white mono">0.0%</div>
+        </div>
+        <div class="p-3 rounded bg-slate-900/90 border border-slate-800/90">
+          <div class="text-[11px] text-slate-400 uppercase">Volume Streamed</div>
+          <div id="streamMb" class="text-lg font-bold text-cyan-400 mono">0.0 / 0.0 MB</div>
+        </div>
+        <div class="p-3 rounded bg-slate-900/90 border border-slate-800/90">
+          <div class="text-[11px] text-slate-400 uppercase">Sustained Speed</div>
+          <div id="streamSpeed" class="text-lg font-bold text-emerald-400 mono">0.00 MB/s</div>
+        </div>
+        <div class="p-3 rounded bg-slate-900/90 border border-slate-800/90">
+          <div class="text-[11px] text-slate-400 uppercase">Row Velocity</div>
+          <div id="streamRowSpeed" class="text-lg font-bold text-indigo-400 mono">0 rows/s</div>
+        </div>
+        <div class="p-3 rounded bg-slate-900/90 border border-slate-800/90">
+          <div class="text-[11px] text-slate-400 uppercase">Rows Ingested</div>
+          <div id="streamRows" class="text-lg font-bold text-white mono">0</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Row 1: Core 64-Bit Mathematical & Telemetry KPIs -->
+    <section class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div class="glass-card p-3.5">
+        <div class="text-xs text-slate-400">Total Rows (Ledger)</div>
+        <div id="kpiRows" class="text-lg font-bold text-white mono mt-1">0</div>
+        <div id="kpiFiles" class="text-[11px] text-slate-500 mono mt-0.5">0 files | avg 0.00 MB/s</div>
+      </div>
+      <div class="glass-card p-3.5">
+        <div class="text-xs text-slate-400">ZSTD Compression</div>
+        <div id="kpiComp" class="text-lg font-bold text-emerald-400 mono mt-1">0.00x</div>
+        <div id="kpiSizes" class="text-[11px] text-slate-500 mono mt-0.5">0.0 &rarr; 0.0 MB</div>
+      </div>
+      <div class="glass-card p-3.5">
+        <div class="text-xs text-slate-400">Exact 64-Bit Mean / &sigma;</div>
+        <div id="kpiMean" class="text-lg font-bold text-cyan-400 mono mt-1">0.0000</div>
+        <div id="kpiStd" class="text-[11px] text-slate-400 mono mt-0.5">&sigma; = 0.0000</div>
+      </div>
+      <div class="glass-card p-3.5">
+        <div class="text-xs text-slate-400">Min / Max / Variance</div>
+        <div id="kpiMinMax" class="text-sm font-bold text-white mono mt-1.5">0.00 / 0.00</div>
+        <div id="kpiVar" class="text-[11px] text-slate-400 mono mt-1">Var = 0.0000</div>
+      </div>
+      <div class="glass-card p-3.5">
+        <div class="text-xs text-slate-400">DDSketch P50 | P95 | P99</div>
+        <div id="kpiQuantiles" class="text-xs font-bold text-amber-400 mono mt-1.5">0.00 | 0.00 | 0.00</div>
+        <div id="kpiIqr" class="text-[11px] text-slate-400 mono mt-1">IQR = 0.0000</div>
+      </div>
+      <div class="glass-card p-3.5">
+        <div class="text-xs text-slate-400">HLL Unique Cardinality</div>
+        <div id="kpiCard" class="text-lg font-bold text-purple-400 mono mt-1">0</div>
+        <div id="kpiCols" class="text-[11px] text-slate-500 mono mt-0.5">value / category</div>
+      </div>
+    </section>
+
+    <!-- Row 2: Signed Financial & Risk Tail KPIs (O(1) Sketch Derived) -->
+    <section class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div class="glass-card p-3 flex items-center justify-between">
+        <div>
+          <div class="text-[11px] text-slate-400 uppercase">Sharpe / Sortino Ratio</div>
+          <div id="kpiSharpeSortino" class="text-sm font-bold text-emerald-400 mono mt-0.5">0.0000 / 0.0000</div>
+        </div>
+        <span class="text-[10px] mono px-2 py-0.5 rounded bg-slate-900 text-slate-400">64-Bit Welford</span>
+      </div>
+      <div class="glass-card p-3 flex items-center justify-between">
+        <div>
+          <div class="text-[11px] text-slate-400 uppercase">Profit Factor / Win Rate</div>
+          <div id="kpiPfWin" class="text-sm font-bold text-cyan-400 mono mt-0.5">0.00x | 0.0%</div>
+        </div>
+        <span class="text-[10px] mono px-2 py-0.5 rounded bg-slate-900 text-slate-400">Pos/Neg Split</span>
+      </div>
+      <div class="glass-card p-3 flex items-center justify-between">
+        <div>
+          <div class="text-[11px] text-slate-400 uppercase">Parametric Tail VaR (95% / 99%)</div>
+          <div id="kpiVarTail" class="text-sm font-bold text-amber-400 mono mt-0.5">0.00 / 0.00</div>
+        </div>
+        <span class="text-[10px] mono px-2 py-0.5 rounded bg-slate-900 text-slate-400">P05 / P01</span>
+      </div>
+      <div class="glass-card p-3 flex items-center justify-between">
+        <div>
+          <div class="text-[11px] text-slate-400 uppercase">Expected Shortfall CVaR (95% / 99%)</div>
+          <div id="kpiCvarTail" class="text-sm font-bold text-rose-400 mono mt-0.5">0.00 / 0.00</div>
+        </div>
+        <span class="text-[10px] mono px-2 py-0.5 rounded bg-slate-900 text-slate-400">Tail Integral</span>
+      </div>
+    </section>
+
+    <!-- Queues & Ledger History -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <!-- Queue & Saved CSVs -->
+      <div class="glass-card p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300">SJF+Aging Inbox &amp; Saved</h2>
+          <div class="flex gap-1.5">
+            <button onclick="generateSimCsv(50, 'schema_a')" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] mono text-cyan-300" title="Generate 50MB IoT Sensor CSV">+50MB IoT</button>
+            <button onclick="generateSimCsv(50, 'schema_b')" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] mono text-amber-300" title="Generate 50MB API Latency CSV">+50MB Latency</button>
+            <button onclick="generateSimCsv(50, 'schema_c')" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[11px] mono text-emerald-300" title="Generate 50MB Signed PnL CSV">+50MB PnL</button>
+          </div>
+        </div>
+
+        <div class="text-xs text-slate-400 mono">Pending in Inbox (<span id="qCount">0</span>):</div>
+        <ul id="queueList" class="space-y-1 text-xs mono max-h-28 overflow-y-auto text-amber-300">
+          <li class="text-slate-600">Empty</li>
+        </ul>
+
+        <div class="text-xs text-slate-400 mono pt-2 border-t border-slate-800">
+          Completed in inbox_saved (<span id="sCount">0</span>):
+        </div>
+        <ul id="savedList" class="space-y-1 text-xs mono max-h-32 overflow-y-auto text-emerald-300">
+          <li class="text-slate-600">None</li>
+        </ul>
+      </div>
+
+      <!-- Ledger File History -->
+      <div class="glass-card p-4 lg:col-span-2 overflow-x-auto">
+        <div class="flex items-center justify-between mb-2.5">
+          <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300">
+            Transactional Manifest Ledger (O(1) RAM-Cached SQLite WAL)
+          </h2>
+          <span class="text-[11px] mono text-slate-400">Ledger Ver: <span id="ledgerVer" class="text-white">1</span></span>
+        </div>
+        <table class="w-full text-left text-xs mono">
+          <thead class="text-slate-400 border-b border-slate-800">
+            <tr>
+              <th class="pb-2">Filename</th>
+              <th class="pb-2">NS</th>
+              <th class="pb-2">Rows</th>
+              <th class="pb-2">Raw &rarr; PQ (MB)</th>
+              <th class="pb-2">Speed</th>
+              <th class="pb-2">Time</th>
+              <th class="pb-2">Mean | P50 | P99</th>
+            </tr>
+          </thead>
+          <tbody id="ledgerBody" class="divide-y divide-slate-800/60"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- DuckDB Out-of-Core OLAP Parquet Explorer (Connected to /api/query/{namespace}) -->
+    <section class="glass-card p-4 space-y-3">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 class="text-xs font-bold uppercase tracking-wider text-slate-300">
+            DuckDB Out-of-Core SSD Parquet OLAP Aggregator
+          </h2>
+          <p id="olapMeta" class="text-[11px] mono text-slate-400 mt-0.5">
+            Executes zero-copy vectorized GROUP BY &amp; threshold pushdown directly on SSD Parquet files.
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+          <label class="text-xs mono text-slate-400">Target NS:</label>
+          <select id="olapNsSelect" class="bg-slate-950 border border-slate-800 text-xs rounded px-2.5 py-1 text-cyan-300 mono focus:outline-none">
+            <option value="schema_ns_01">schema_ns_01</option>
+          </select>
+          <label class="text-xs mono text-slate-400">Min Filter (&ge;):</label>
+          <input id="olapMinVal" type="number" step="any" placeholder="None (All rows)" class="w-36 bg-slate-950 border border-slate-800 rounded px-2.5 py-1 text-xs mono text-emerald-300 focus:outline-none" />
+          <button onclick="runOlapQuery(false)" class="px-3.5 py-1 rounded bg-cyan-600 hover:bg-cyan-500 text-xs font-bold text-white">
+            Query Lakehouse
+          </button>
+          <button onclick="runOlapQuery(true)" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-xs mono text-slate-300">
+            Reset Filter
+          </button>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto max-h-64">
+        <table class="w-full text-left text-xs mono">
+          <thead class="text-slate-400 border-b border-slate-800">
+            <tr>
+              <th class="pb-1.5 pr-4">Rank</th>
+              <th class="pb-1.5 pr-4">Category (<span id="olapCatCol">category</span>)</th>
+              <th class="pb-1.5 pr-4">Matched Rows</th>
+              <th class="pb-1.5 pr-4">Share of Result</th>
+              <th class="pb-1.5 w-1/3">Distribution Bar</th>
+            </tr>
+          </thead>
+          <tbody id="olapBody" class="divide-y divide-slate-800/50">
+            <tr>
+              <td colspan="5" class="py-3 text-slate-600">Click "Query Lakehouse" to execute out-of-core DuckDB aggregation.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </div>
+
+  <script>
+    // =========================================================================
+    // Zero-Reflow DOM Memoization Engine (Prevents V8 GC & CPU/L3 Contention)
+    // =========================================================================
+    const _domTextCache = Object.create(null);
+    const _elCache = Object.create(null);
+
+    let currentNamespace = "all";
+    let activeNumCol = "temperature";
+    let activeCatCol = "sensor_id";
+
+    let _lastQueueSig = "";
+    let _lastSavedSig = "";
+    let _lastLedgerVer = -1;
+    let _lastNsSig = "";
+    let _lastProgressRatio = -1;
+    let _pendingState = null;
+    let _lastFullState = null;
+    let _cachedSavedFiles = [];
+    let _rafScheduled = false;
+    let _wsRef = null;
+
+    function getEl(id) {
+      return _elCache[id] || (_elCache[id] = document.getElementById(id));
+    }
+
+    function setText(id, val) {
+      const strVal = String(val);
+      if (_domTextCache[id] !== strVal) {
+        const el = getEl(id);
+        if (el) el.textContent = strVal;
+        _domTextCache[id] = strVal;
+      }
+    }
+
+    function fmtNum(n) {
+      return Math.round(Number(n || 0)).toLocaleString("en-US");
+    }
+
+    function round4(n) {
+      return Math.round(n * 10000) / 10000;
+    }
+
+    const nsSelect = getEl("nsSelect");
+    nsSelect.addEventListener("change", (e) => {
+      currentNamespace = e.target.value;
+      if (currentNamespace !== "all") {
+        const olapSel = getEl("olapNsSelect");
+        if (olapSel) olapSel.value = currentNamespace;
+      }
+      if (_lastFullState) {
+        renderState(_lastFullState);
+      }
+    });
+
+    // Pause DOM updates when browser tab is hidden so 100% of CPU stays on TitanEngine
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && _lastFullState) {
+        scheduleRender(_lastFullState);
+      }
+    });
+
+    function scheduleRender(state) {
+      _lastFullState = state;
+      if (document.hidden) return;
+      _pendingState = state;
+      if (!_rafScheduled) {
+        _rafScheduled = true;
+        requestAnimationFrame(() => {
+          _rafScheduled = false;
+          if (_pendingState) {
+            renderState(_pendingState);
+            _pendingState = null;
+          }
+        });
+      }
+    }
+
+    /**
+     * Synthesizes O(1) KPIs from `s.namespaces` (sent by server.py v6.0.0)
+     * or falls back to `s.kpis` if directly provided.
+     */
+    function resolveActiveKpis(s) {
+      const nsMap = (s.namespaces && typeof s.namespaces === "object") ? s.namespaces : {};
+      const nsKeys = Object.keys(nsMap);
+
+      if (currentNamespace !== "all" && nsMap[currentNamespace]) {
+        const info = nsMap[currentNamespace];
+        return {
+          files_processed: info.files_count || 0,
+          total_rows: info.total_rows || 0,
+          total_raw_mb: info.raw_mb || 0,
+          total_parquet_mb: info.comp_mb || 0,
+          compression_ratio: info.compression_ratio || 0,
+          avg_mb_per_sec: info.avg_speed_mbps || 0,
+          num_col: info.num_col || "value",
+          cat_col: info.cat_col || "category",
+          metrics: info.kpis || info.metrics || {},
+        };
+      }
+
+      if (s.kpis && s.kpis.metrics && currentNamespace === "all") {
+        return s.kpis;
+      }
+
+      if (nsKeys.length === 0) {
+        return {
+          files_processed: 0,
+          total_rows: 0,
+          total_raw_mb: 0,
+          total_parquet_mb: 0,
+          compression_ratio: 0,
+          avg_mb_per_sec: 0,
+          num_col: "value",
+          cat_col: "category",
+          metrics: {},
+        };
+      }
+
+      // Aggregate across all namespaces in O(1) using Chan-Welford exact parallel combination
+      let totFiles = 0;
+      let totRows = 0;
+      let totRaw = 0.0;
+      let totComp = 0.0;
+      let totElapsed = 0.0;
+      let combCount = 0;
+      let combMean = 0.0;
+      let combM2 = 0.0;
+      let globalMin = Infinity;
+      let globalMax = -Infinity;
+      let posSum = 0.0;
+      let negSum = 0.0;
+      let weightedP01 = 0.0;
+      let weightedP05 = 0.0;
+      let weightedP50 = 0.0;
+      let weightedP95 = 0.0;
+      let weightedP99 = 0.0;
+      let weightedIqr = 0.0;
+      let weightedCvar95 = 0.0;
+      let weightedCvar99 = 0.0;
+      let weightedWinRate = 0.0;
+      let weightedSortino = 0.0;
+      let totalCard = 0;
+      let lastNumCol = "value";
+      let lastCatCol = "category";
+      let worstStatus = "HEALTHY_OPTIMAL";
+
+      for (const k of nsKeys) {
+        const info = nsMap[k];
+        const m = info.kpis || info.metrics || {};
+        const n = Number(m.count || info.total_rows || 0);
+
+        totFiles += Number(info.files_count || 0);
+        totRows += Number(info.total_rows || 0);
+        totRaw += Number(info.raw_mb || 0);
+        totComp += Number(info.comp_mb || 0);
+        totElapsed += Number(info.total_elapsed_s || 0);
+
+        if (info.num_col) lastNumCol = info.num_col;
+        if (info.cat_col) lastCatCol = info.cat_col;
+        totalCard = Math.max(totalCard, Number(m.cardinality || info.cardinality || 0));
+
+        if (n > 0) {
+          const bMean = Number(m.mean || 0);
+          const bVar = Number(m.variance || 0);
+          const bM2 = bVar * Math.max(1, n - 1);
+          const bMin = Number(m.min ?? 0);
+          const bMax = Number(m.max ?? 0);
+
+          if (combCount === 0) {
+            combCount = n;
+            combMean = bMean;
+            combM2 = bM2;
+            globalMin = bMin;
+            globalMax = bMax;
+          } else {
+            const newCnt = combCount + n;
+            const delta = bMean - combMean;
+            const wb = n / newCnt;
+            combMean += delta * wb;
+            combM2 += bM2 + (delta * delta) * (combCount * wb);
+            if (bMin < globalMin) globalMin = bMin;
+            if (bMax > globalMax) globalMax = bMax;
+            combCount = newCnt;
+          }
+
+          posSum += Number(m.pos_sum || 0);
+          negSum += Number(m.neg_sum || 0);
+          weightedP01 += Number(m.p01 || 0) * n;
+          weightedP05 += Number(m.p05 || 0) * n;
+          weightedP50 += Number(m.p50 || 0) * n;
+          weightedP95 += Number(m.p95 || 0) * n;
+          weightedP99 += Number(m.p99 || 0) * n;
+          weightedIqr += Number(m.iqr || 0) * n;
+          weightedCvar95 += Number(m.cvar_95 || 0) * n;
+          weightedCvar99 += Number(m.cvar_99 || 0) * n;
+          weightedWinRate += Number(m.win_rate_pct || 0) * n;
+          weightedSortino += Number(m.sortino_ratio || 0) * n;
+
+          if (m.financial_status === "CRITICAL_DRAWDOWN") {
+            worstStatus = "CRITICAL_DRAWDOWN";
+          } else if (m.financial_status === "HIGH_VOLATILITY" && worstStatus !== "CRITICAL_DRAWDOWN") {
+            worstStatus = "HIGH_VOLATILITY";
+          }
+        }
+      }
+
+      const finalVar = combCount > 1 ? combM2 / (combCount - 1) : 0.0;
+      const finalStd = Math.sqrt(Math.max(0.0, finalVar));
+      const invN = combCount > 0 ? 1.0 / combCount : 0.0;
+      const sharpe = finalStd > 1e-12 ? combMean / finalStd : 0.0;
+      const pf = negSum > 1e-12 ? posSum / negSum : (posSum > 1e-12 ? 999.0 : 0.0);
+
+      return {
+        files_processed: totFiles,
+        total_rows: totRows,
+        total_raw_mb: totRaw,
+        total_parquet_mb: totComp,
+        compression_ratio: totComp > 0.01 ? totRaw / totComp : 0.0,
+        avg_mb_per_sec: totElapsed > 0.001 ? totRaw / totElapsed : 0.0,
+        num_col: lastNumCol,
+        cat_col: lastCatCol,
+        metrics: {
+          count: combCount,
+          mean: combMean,
+          stddev: finalStd,
+          variance: finalVar,
+          min: Number.isFinite(globalMin) ? globalMin : 0.0,
+          max: Number.isFinite(globalMax) ? globalMax : 0.0,
+          p01: weightedP01 * invN,
+          p05: weightedP05 * invN,
+          p50: weightedP50 * invN,
+          p95: weightedP95 * invN,
+          p99: weightedP99 * invN,
+          iqr: weightedIqr * invN,
+          cardinality: totalCard,
+          sharpe_ratio: sharpe,
+          sortino_ratio: weightedSortino * invN,
+          profit_factor: pf,
+          win_rate_pct: weightedWinRate * invN,
+          var_95: weightedP05 * invN,
+          var_99: weightedP01 * invN,
+          cvar_95: weightedCvar95 * invN,
+          cvar_99: weightedCvar99 * invN,
+          financial_status: worstStatus,
+        },
+      };
+    }
+
+    function renderState(s) {
+      if (!s) return;
+
+      // 1. Hardware Telemetry
+      const sys = s.hardware || s.hw || s.system || {};
+      setText("hwCpu", `${Number(sys.cpu_pct ?? sys.cpu ?? 0).toFixed(1)}%`);
+      setText("hwRam", `${Number(sys.ram_used_gb || 0).toFixed(2)} / ${Number(sys.ram_total_gb || 16).toFixed(1)} GB`);
+      setText("hwProcRam", `(${Number(sys.ram_mb || 0).toFixed(0)} MB)`);
+      setText("hwSwap", `${Number(sys.swap_used_mb || 0).toFixed(0)} MB`);
+
+      // 2. Live Streaming Progress (with exact Elapsed & Row Velocity reconstruction)
+      const p = s.progress || s.live_progress || {};
+      const active = Boolean(p.active);
+      const statusText = p.stage || p.status || (active ? "STREAMING" : "IDLE");
+
+      setText("streamBadge", statusText);
+      const badgeEl = getEl("streamBadge");
+      const targetBadgeClass = active
+        ? "px-2.5 py-0.5 text-xs font-bold rounded mono bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+        : "px-2.5 py-0.5 text-xs font-bold rounded mono bg-slate-800 text-slate-400";
+      if (badgeEl.className !== targetBadgeClass) {
+        badgeEl.className = targetBadgeClass;
+      }
+
+      setText("streamFile", p.file || p.filename || "Idle \u2014 Drop CSV into ./inbox");
+      setText("streamNs", p.namespace ? `[${p.namespace}]` : "");
+
+      const doneMb = Number(p.done_mb ?? p.processed_mb ?? 0);
+      const totMb = Number(p.raw_mb ?? p.total_mb ?? 0);
+      const spdMb = Number(p.speed_mbps ?? p.mb_per_sec ?? 0);
+      const rowsCnt = Number(p.rows ?? p.rows_processed ?? 0);
+      const etaSec = Number(p.eta_s ?? p.eta_sec ?? 0);
+
+      // Reconstruct exact elapsed seconds & row velocity if not explicitly in live_progress
+      const derivedElapsed = (p.elapsed_sec ?? p.elapsed_s) !== undefined
+        ? Number(p.elapsed_sec ?? p.elapsed_s)
+        : (active && spdMb > 0.01 ? doneMb / spdMb : 0.0);
+      const derivedRowSpd = p.rows_per_sec !== undefined
+        ? Number(p.rows_per_sec)
+        : (derivedElapsed > 0.05 ? Math.round(rowsCnt / derivedElapsed) : 0);
+
+      setText("streamElapsed", `${derivedElapsed.toFixed(1)}s`);
+      setText("streamEta", `${etaSec.toFixed(1)}s`);
+
+      const pct = Math.min(100, Math.max(0, Number(p.pct || 0)));
+      setText("streamPct", `${pct.toFixed(1)}%`);
+
+      const ratio = round4(pct / 100.0);
+      if (_lastProgressRatio !== ratio) {
+        getEl("streamBar").style.transform = `scaleX(${ratio})`;
+        _lastProgressRatio = ratio;
+      }
+
+      setText("streamMb", `${doneMb.toFixed(1)} / ${totMb.toFixed(1)} MB`);
+      setText("streamSpeed", `${spdMb.toFixed(2)} MB/s`);
+      setText("streamRowSpeed", `${fmtNum(derivedRowSpd)} rows/s`);
+      setText("streamRows", fmtNum(rowsCnt));
+
+      // 3. Global & Namespace Mathematical KPIs
+      const k = resolveActiveKpis(s);
+      const m = k.metrics || {};
+
+      if (k.num_col) activeNumCol = k.num_col;
+      if (k.cat_col) activeCatCol = k.cat_col;
+
+      setText("kpiRows", fmtNum(k.total_rows || 0));
+      setText("kpiFiles", `${k.files_processed || 0} files | avg ${Number(k.avg_mb_per_sec || 0).toFixed(2)} MB/s`);
+      setText("kpiComp", `${Number(k.compression_ratio || 0).toFixed(2)}x`);
+      setText("kpiSizes", `${Number(k.total_raw_mb || 0).toFixed(1)} \u2192 ${Number(k.total_parquet_mb || 0).toFixed(1)} MB`);
+      setText("kpiMean", Number(m.mean || 0).toFixed(4));
+      setText("kpiStd", `\u03c3 = ${Number(m.stddev || 0).toFixed(4)}`);
+      setText("kpiMinMax", `${Number(m.min || 0).toFixed(2)} / ${Number(m.max || 0).toFixed(2)}`);
+      setText("kpiVar", `Var = ${Number(m.variance || 0).toFixed(4)}`);
+      setText("kpiQuantiles", `${Number(m.p50 || 0).toFixed(2)} | ${Number(m.p95 || 0).toFixed(2)} | ${Number(m.p99 || 0).toFixed(2)}`);
+      setText("kpiIqr", `IQR = ${Number(m.iqr || 0).toFixed(4)}`);
+      setText("kpiCard", fmtNum(m.cardinality || 0));
+      setText("kpiCols", `${k.num_col || "value"} / ${k.cat_col || "category"}`);
+
+      // Financial & Tail Risk KPIs
+      setText("kpiSharpeSortino", `${Number(m.sharpe_ratio || 0).toFixed(4)} / ${Number(m.sortino_ratio || 0).toFixed(4)}`);
+      setText("kpiPfWin", `${Number(m.profit_factor || 0).toFixed(2)}x | ${Number(m.win_rate_pct || 0).toFixed(1)}%`);
+      setText("kpiVarTail", `${Number(m.var_95 ?? m.p05 ?? 0).toFixed(2)} / ${Number(m.var_99 ?? m.p01 ?? 0).toFixed(2)}`);
+      setText("kpiCvarTail", `${Number(m.cvar_95 || 0).toFixed(2)} / ${Number(m.cvar_99 || 0).toFixed(2)}`);
+      setText("finStatusBadge", m.financial_status || "IDLE");
+
+      // 4. Namespace Selectors (Rebuild ONLY if namespace list changed)
+      const nsList = (s.namespaces && typeof s.namespaces === "object")
+        ? Object.keys(s.namespaces).sort()
+        : [];
+      const nsSig = nsList.join(",");
+      if (nsSig !== _lastNsSig) {
+        _lastNsSig = nsSig;
+        const opts = [`<option value="all">Namespace: ALL</option>`];
+        const olapOpts = [];
+        for (const ns of nsList) {
+          const sel = ns === currentNamespace ? "selected" : "";
+          opts.push(`<option value="${ns}" ${sel}>Namespace: ${ns}</option>`);
+          olapOpts.push(`<option value="${ns}">${ns}</option>`);
+        }
+        nsSelect.innerHTML = opts.join("");
+        if (olapOpts.length > 0) {
+          getEl("olapNsSelect").innerHTML = olapOpts.join("");
+        }
+      }
+
+      // 5. Queue List (Rebuild ONLY if queue signature changed)
+      const q = s.queue || s.sjf_queue || [];
+      const qSig = q.map(f => `${f.name || f.filename}:${f.size_mb}`).join("|");
+      if (qSig !== _lastQueueSig) {
+        _lastQueueSig = qSig;
+        setText("qCount", q.length);
+        getEl("queueList").innerHTML = q.length
+          ? q.map(f => `<li class="flex justify-between"><span>\u2022 ${f.name || f.filename}</span><span>${f.size_mb} MB</span></li>`).join("")
+          : `<li class="text-slate-600">Empty</li>`;
+      }
+
+      // 6. Saved List (Rebuild ONLY if saved signature changed)
+      const sv = s.saved_files || [];
+      _cachedSavedFiles = sv;
+      const svSig = sv.map(f => `${f.name || f.filename}:${f.size_mb}`).join("|");
+      if (svSig !== _lastSavedSig) {
+        _lastSavedSig = svSig;
+        setText("sCount", sv.length);
+        getEl("savedList").innerHTML = sv.length
+          ? sv.map(f => {
+              const fn = f.name || f.filename;
+              return `<li class="flex items-center justify-between gap-2">
+                <span class="truncate">\u2713 ${fn} (${f.size_mb} MB)</span>
+                <button onclick="replaySingleFile('${fn}')" class="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-indigo-600 text-[10px] text-slate-200">Replay</button>
+              </li>`;
+            }).join("")
+          : `<li class="text-slate-600">None</li>`;
+      }
+
+      // 7. Ledger History Table (Rebuild ONLY when ledger_version increments!)
+      const lVer = Number(s.ledger_version || 0);
+      const logs = s.files_log || s.recent_files || [];
+      const effectiveVer = lVer * 1000 + logs.length;
+      if (effectiveVer !== _lastLedgerVer) {
+        _lastLedgerVer = effectiveVer;
+        setText("ledgerVer", lVer);
+        getEl("ledgerBody").innerHTML = logs.length
+          ? logs.map(r => {
+              const rm = r.kpis || r.metrics || {};
+              const fn = r.filename || r.file || "";
+              const pqMb = r.parquet_mb ?? r.comp_mb ?? 0;
+              const spd = r.mb_per_sec ?? r.speed_mbps ?? 0;
+              const elSec = r.elapsed_sec ?? r.elapsed_s ?? 0;
+              return `<tr class="hover:bg-slate-900/60">
+                <td class="py-1.5 text-white font-medium">${fn}</td>
+                <td class="py-1.5 text-cyan-400">${r.namespace || "-"}</td>
+                <td class="py-1.5">${fmtNum(r.rows)}</td>
+                <td class="py-1.5">${r.raw_mb} &rarr; ${pqMb} (${r.compression_ratio}x)</td>
+                <td class="py-1.5 text-emerald-400 font-bold">${spd} MB/s</td>
+                <td class="py-1.5">${elSec}s</td>
+                <td class="py-1.5 text-amber-300">${Number(rm.mean || 0).toFixed(2)} | ${Number(rm.p50 || 0).toFixed(2)} | ${Number(rm.p99 || 0).toFixed(2)}</td>
+              </tr>`;
+            }).join("")
+          : `<tr><td colspan="7" class="py-3 text-slate-600">No files ingested yet.</td></tr>`;
+      }
+    }
+
+    function connectWs() {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      const ws = new WebSocket(`${proto}//${location.host}/ws`);
+      _wsRef = ws;
+      ws.onopen = () => {
+        getEl("statusDot").className = "w-3 h-3 rounded-full bg-emerald-500";
+      };
+      ws.onmessage = (ev) => {
+        try {
+          scheduleRender(JSON.parse(ev.data));
+        } catch (e) {}
+      };
+      ws.onclose = () => {
+        getEl("statusDot").className = "w-3 h-3 rounded-full bg-rose-500";
+        setTimeout(connectWs, 1500);
+      };
+    }
+
+    async function refreshStateNow() {
+      try {
+        const res = await fetch("/api/state");
+        if (res.ok) {
+          scheduleRender(await res.json());
+        }
+      } catch (e) {}
+    }
+
+    async function restoreSaved() {
+      if (!_cachedSavedFiles || _cachedSavedFiles.length === 0) return;
+      for (const item of _cachedSavedFiles) {
+        const fn = item.name || item.filename;
+        if (fn) {
+          await fetch(`/api/replay/${encodeURIComponent(fn)}`, { method: "POST" });
+        }
+      }
+      await refreshStateNow();
+    }
+
+    async function replaySingleFile(filename) {
+      await fetch(`/api/replay/${encodeURIComponent(filename)}`, { method: "POST" });
+      await refreshStateNow();
+    }
+
+    async function generateSimCsv(sizeMb, schemaType) {
+      await fetch(`/api/generate/${sizeMb}/${schemaType}`, { method: "POST" });
+      await refreshStateNow();
+    }
+
+    async function compactActiveNamespace() {
+      const targetNs = currentNamespace !== "all"
+        ? currentNamespace
+        : (getEl("olapNsSelect").value || "schema_ns_01");
+      const meta = getEl("olapMeta");
+      meta.textContent = `Compacting Parquet files in [${targetNs}]...`;
+      try {
+        const res = await fetch(`/api/compact/${encodeURIComponent(targetNs)}`, { method: "POST" });
+        const data = await res.json();
+        meta.textContent = `Compaction [${targetNs}]: ${data.status} ${data.detail || `(${data.files_merged || 0} files merged in ${data.elapsed_ms || 0} ms)`}`;
+        await refreshStateNow();
+      } catch (err) {
+        meta.textContent = `Compaction error: ${err.message}`;
+      }
+    }
+
+    async function runOlapQuery(resetFilter) {
+      const minInput = getEl("olapMinVal");
+      if (resetFilter) minInput.value = "";
+
+      const ns = getEl("olapNsSelect").value || (currentNamespace !== "all" ? currentNamespace : "schema_ns_01");
+      const rawMin = minInput.value.trim();
+      const qs = rawMin !== "" ? `?min_val=${encodeURIComponent(rawMin)}` : "";
+      const meta = getEl("olapMeta");
+
+      meta.textContent = `Querying DuckDB Lakehouse [${ns}]...`;
+      try {
+        const res = await fetch(`/api/query/${encodeURIComponent(ns)}${qs}`);
+        const data = await res.json();
+        if (data.engine_busy) {
+          meta.textContent = `Engine is actively streaming 50GB CSV (Zero-Seek Protection active). Showing O(1) RAM KPIs (${fmtNum(data.matched_rows)} rows).`;
+          return;
+        }
+        setText("olapCatCol", activeCatCol || "category");
+        const cats = data.top_categories || [];
+        const matched = Number(data.matched_rows || 0);
+        meta.textContent = `Namespace [${ns}] | Status: ${data.status} | Matched: ${fmtNum(matched)} rows | Latency: ${data.latency_ms} ms`;
+
+        if (!cats.length) {
+          getEl("olapBody").innerHTML = `<tr><td colspan="5" class="py-3 text-slate-500">No matching rows found in [${ns}].</td></tr>`;
+          return;
+        }
+
+        const maxCnt = Math.max(1, ...cats.map(c => Number(c.count || 0)));
+        getEl("olapBody").innerHTML = cats.map((c, idx) => {
+          const cnt = Number(c.count || 0);
+          const sharePct = matched > 0 ? ((cnt / matched) * 100).toFixed(2) : "0.00";
+          const barWidth = Math.max(2, Math.round((cnt / maxCnt) * 100));
+          return `<tr class="hover:bg-slate-900/50">
+            <td class="py-1.5 pr-4 text-slate-500">#${idx + 1}</td>
+            <td class="py-1.5 pr-4 text-cyan-300 font-semibold">${c.category}</td>
+            <td class="py-1.5 pr-4 text-white">${fmtNum(cnt)}</td>
+            <td class="py-1.5 pr-4 text-emerald-400">${sharePct}%</td>
+            <td class="py-1.5">
+              <div class="w-full h-2.5 bg-slate-950 rounded overflow-hidden border border-slate-800">
+                <div class="h-full bg-gradient-to-r from-cyan-500 to-emerald-400" style="width:${barWidth}%"></div>
+              </div>
+            </td>
+          </tr>`;
+        }).join("");
+      } catch (err) {
+        meta.textContent = `Query error: ${err.message}`;
+      }
+    }
+
+    connectWs();
+  </script>
+</body>
+</html>

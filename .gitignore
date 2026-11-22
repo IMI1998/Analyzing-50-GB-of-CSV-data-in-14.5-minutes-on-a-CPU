@@ -1,0 +1,57 @@
+# =============================================================================
+# Titan Factory — repository hygiene
+# =============================================================================
+
+# ── Runtime data & generated artifacts ───────────────────────────────────────
+inbox/
+inbox_saved/
+inbox_failed/
+quarantine/
+lakehouse/
+parquet_lake/
+data/
+
+# Never commit raw or derived data files, even outside the folders above.
+*.csv
+*.parquet
+*.claiming
+*.tmp
+
+# ── Manifest ledger (local SQLite state) ─────────────────────────────────────
+manifest.db
+manifest.db-wal
+manifest.db-shm
+*.sqlite
+*.sqlite3
+
+# ── Local-only extras (not part of the public core) ──────────────────────────
+_extras/
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Editors / OS ─────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
