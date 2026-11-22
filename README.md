@@ -168,8 +168,8 @@ flowchart LR
 **پیش‌نیاز:** Python 3.10 یا بالاتر
 
 ```bash
-git clone https://github.com/IMI1998/Analyzing-50-GB-of-CSV-data-in-14-minutes-on-a-CPU.git
-cd Analyzing-50-GB-of-CSV-data-in-14-minutes-on-a-CPU
+git clone https://github.com/IMI1998/Analyzing-50-GB-of-CSV-data-in-14.5-minutes-on-a-CPU.git
+cd Analyzing-50-GB-of-CSV-data-in-14.5-minutes-on-a-CPU
 
 python -m venv .venv
 
